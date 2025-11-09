@@ -60,12 +60,14 @@ app.post(
       }
 
       const metadata = {
-        clinic: req.body.clinic || '',
-        reportPeriod: req.body.reportPeriod || '',
-        complaints: req.body.complaints || '',
-        complaintType: req.body.complaintType || '',
-        remarks: req.body.remarks || '',
-        referrals: req.body.referrals || '',
+        clinic: sanitizeText(req.body.clinic),
+        reportPeriod: (req.body.reportPeriod || '').trim(),
+        complaintsMedical: normalizeNumber(req.body.complaintsMedical),
+        complaintsAdministrative: normalizeNumber(
+          req.body.complaintsAdministrative,
+        ),
+        remarks: sanitizeTextArea(req.body.remarks),
+        referrals: normalizeNumber(req.body.referrals),
       };
 
       workspaceDir = req.uploadWorkspace;
@@ -80,7 +82,7 @@ app.post(
         csvOutputs.push(csvPath);
       }
 
-      await syncSheets(csvOutputs, metadata.clinic, metadata.reportPeriod);
+      await syncSheets(csvOutputs, metadata);
       res.send(renderSuccess(metadata, savedInputs, csvOutputs));
     } catch (error) {
       console.error(error);
@@ -114,15 +116,19 @@ function ensureCsv(filePath) {
   return convertHtmlToCsv(filePath);
 }
 
-function syncSheets(csvPaths, clinicName, reportPeriod) {
+function syncSheets(csvPaths, metadata) {
   return new Promise((resolve, reject) => {
     const args = ['sync-to-sheets.js'];
-    if (clinicName) {
-      args.push('--clinic', clinicName);
+    if (metadata.clinic) {
+      args.push('--clinic', metadata.clinic);
     }
-    if (reportPeriod) {
-      args.push('--date', reportPeriod);
+    if (metadata.reportPeriod) {
+      args.push('--date', metadata.reportPeriod);
     }
+    args.push('--medical', metadata.complaintsMedical);
+    args.push('--administrative', metadata.complaintsAdministrative);
+    args.push('--referrals', metadata.referrals);
+    args.push('--remarks', metadata.remarks);
     args.push(...csvPaths);
 
     execFile(
@@ -376,16 +382,12 @@ function renderForm(errorMessage) {
         <input type="month" id="reportPeriod" name="reportPeriod" min="2020-01">
       </div>
       <div class="field">
-        <label for="complaints">Number of Complaints (عدد الشكاوى اليوم):</label>
-        <input type="number" min="0" id="complaints" name="complaints" placeholder="0">
+        <label for="complaintsMedical">Number of Medical Complaints:</label>
+        <input type="number" min="0" id="complaintsMedical" name="complaintsMedical" placeholder="0">
       </div>
       <div class="field">
-        <label for="complaintType">Complaint Type:</label>
-        <select id="complaintType" name="complaintType">
-          <option value="Medical">Medical</option>
-          <option value="Service">Service</option>
-          <option value="Insurance">Insurance</option>
-        </select>
+        <label for="complaintsAdministrative">Number of Administrative Complaints:</label>
+        <input type="number" min="0" id="complaintsAdministrative" name="complaintsAdministrative" placeholder="0">
       </div>
       <div class="field">
         <label for="remarks">Remarks (Optional):</label>
@@ -406,8 +408,8 @@ function renderSuccess(metadata, htmlFiles, csvFiles) {
   const rows = [
     ['Clinic', metadata.clinic || '-'],
     ['Month & Year', metadata.reportPeriod || '-'],
-    ['Complaints', metadata.complaints || '0'],
-    ['Complaint Type', metadata.complaintType || '-'],
+    ['Medical Complaints', metadata.complaintsMedical || '0'],
+    ['Administrative Complaints', metadata.complaintsAdministrative || '0'],
     ['Referrals', metadata.referrals || '0'],
     ['Remarks', metadata.remarks || '—'],
   ];
@@ -481,6 +483,19 @@ function renderSuccess(metadata, htmlFiles, csvFiles) {
   </div>
 </body>
 </html>`;
+}
+
+function sanitizeText(value) {
+  return (value || '').trim();
+}
+
+function sanitizeTextArea(value) {
+  return (value || '').trim();
+}
+
+function normalizeNumber(value) {
+  const num = Number(value);
+  return Number.isFinite(num) && num >= 0 ? num : 0;
 }
 
 function escapeHtml(value) {

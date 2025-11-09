@@ -8,12 +8,19 @@ const SPREADSHEET_NAME = 'Dallah Clinics';
 const DEFAULT_SPREADSHEET_ID = '10Bhfqts3cyyjy7VP0ENA08wNdwlLRGZ9JK4QaHJ2egU';
 const BASE_REVENUE_TAB = 'Revenue';
 const BASE_DEPARTMENT_TAB = 'Department Wise';
+const OTHER_TAB = 'Other';
 const UNKNOWN_LABEL = 'Unknown';
 
 async function main() {
-  const { files: fileArgs, clinicName, reportPeriod } = parseArgs(
-    process.argv.slice(2),
-  );
+  const {
+    files: fileArgs,
+    clinicName,
+    reportPeriod,
+    medicalComplaints,
+    administrativeComplaints,
+    referrals,
+    remarks,
+  } = parseArgs(process.argv.slice(2));
   const spreadsheetId =
     process.env.SPREADSHEET_ID || DEFAULT_SPREADSHEET_ID;
   if (!spreadsheetId) {
@@ -81,6 +88,15 @@ async function main() {
     console.warn('No department data detected in the provided CSV files.');
   }
 
+  await appendOtherMetricsRow(sheets, spreadsheetId, {
+    clinicName,
+    reportPeriod,
+    medicalComplaints,
+    administrativeComplaints,
+    referrals,
+    remarks,
+  });
+
   console.log(
     `Finished syncing data to "${SPREADSHEET_NAME}" (${spreadsheetId}).`,
   );
@@ -142,6 +158,10 @@ function parseArgs(args) {
   const files = [];
   let clinic = process.env.CLINIC_NAME || '';
   let reportPeriod = process.env.REPORT_PERIOD || '';
+  let medical = process.env.MEDICAL_COMPLAINTS || '';
+  let administrative = process.env.ADMINISTRATIVE_COMPLAINTS || '';
+  let referrals = process.env.REFERRALS || '';
+  let remarks = process.env.REMARKS || '';
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -167,6 +187,50 @@ function parseArgs(args) {
       continue;
     }
 
+    if (arg === '--medical' && args[i + 1]) {
+      medical = args[i + 1];
+      i += 1;
+      continue;
+    }
+
+    if (arg.startsWith('--medical=')) {
+      medical = arg.split('=').slice(1).join('=');
+      continue;
+    }
+
+    if (arg === '--administrative' && args[i + 1]) {
+      administrative = args[i + 1];
+      i += 1;
+      continue;
+    }
+
+    if (arg.startsWith('--administrative=')) {
+      administrative = arg.split('=').slice(1).join('=');
+      continue;
+    }
+
+    if (arg === '--referrals' && args[i + 1]) {
+      referrals = args[i + 1];
+      i += 1;
+      continue;
+    }
+
+    if (arg.startsWith('--referrals=')) {
+      referrals = arg.split('=').slice(1).join('=');
+      continue;
+    }
+
+    if (arg === '--remarks' && args[i + 1]) {
+      remarks = args[i + 1];
+      i += 1;
+      continue;
+    }
+
+    if (arg.startsWith('--remarks=')) {
+      remarks = arg.split('=').slice(1).join('=');
+      continue;
+    }
+
     files.push(arg);
   }
 
@@ -174,7 +238,36 @@ function parseArgs(args) {
     files,
     clinicName: clinic.trim(),
     reportPeriod: reportPeriod.trim(),
+    medicalComplaints: medical.trim(),
+    administrativeComplaints: administrative.trim(),
+    referrals: referrals.trim(),
+    remarks: remarks.trim(),
   };
+}
+
+async function appendOtherMetricsRow(
+  sheets,
+  spreadsheetId,
+  { clinicName, reportPeriod, medicalComplaints, administrativeComplaints, referrals, remarks },
+) {
+  if (!clinicName || !reportPeriod) {
+    return;
+  }
+
+  const normalizedDate = normalizePeriod(reportPeriod);
+  const row = [
+    normalizedDate,
+    clinicName,
+    Number(medicalComplaints) || 0,
+    Number(administrativeComplaints) || 0,
+    Number(referrals) || 0,
+    remarks || '',
+  ];
+
+  await pushToSheet(sheets, spreadsheetId, OTHER_TAB, [
+    ['Date', 'Clinic', 'Medical Complaints', 'Administrative Complaints', 'Referrals', 'Remarks'],
+    row,
+  ]);
 }
 
 function buildTabName(base, clinic) {
@@ -288,6 +381,76 @@ function formatNumericColumns(rows, exclusionSet) {
   return [header, ...formattedRows];
 }
 
+function findColumnIndex(header, columnName) {
+  return header.findIndex(
+    (cell) =>
+      cell && cell.trim().toLowerCase() === columnName.trim().toLowerCase(),
+  );
+}
+
+async function removeRowsForDate(
+  sheets,
+  spreadsheetId,
+  tabName,
+  targetDate,
+  clinicName = null,
+) {
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${tabName}!A:ZZ`,
+    });
+
+    const values = response.data.values || [];
+    if (!values.length) {
+      return;
+    }
+
+    const header = values[0];
+    const dateIdx = findColumnIndex(header, 'date');
+    if (dateIdx === -1) {
+      return;
+    }
+
+    const clinicIdx =
+      clinicName !== null ? findColumnIndex(header, 'clinic') : -1;
+    const filteredRows = values.slice(1).filter((row) => {
+      const rowDate = row[dateIdx] || '';
+      if (rowDate !== targetDate) {
+        return true;
+      }
+
+      if (clinicIdx === -1 || clinicName === null) {
+        return false;
+      }
+
+      return (row[clinicIdx] || '') !== clinicName;
+    });
+
+    if (filteredRows.length === values.length - 1) {
+      return;
+    }
+
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: `${tabName}!A:ZZ`,
+    });
+
+    const newValues = [header, ...filteredRows];
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${tabName}!A1`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: newValues },
+    });
+  } catch (error) {
+    if (error.code === 400 || error.code === 404) {
+      return;
+    }
+    throw error;
+  }
+}
+
 function detectNumericColumnIndices(header, dataRows, exclusionSet) {
   return header.reduce((indices, cell, idx) => {
     const key = cell ? cell.trim().toLowerCase() : '';
@@ -358,6 +521,22 @@ function cleanCellValue(value) {
 async function pushToSheet(sheets, spreadsheetId, tabName, rows) {
   if (!rows.length) {
     return;
+  }
+
+  const dateIndex = findColumnIndex(rows[0], 'date');
+  const targetDate =
+    dateIndex !== -1 && rows.length > 1 ? rows[1][dateIndex] : null;
+  const clinicIndex = findColumnIndex(rows[0], 'clinic');
+  const targetClinic =
+    clinicIndex !== -1 && rows.length > 1 ? rows[1][clinicIndex] : null;
+  if (dateIndex !== -1 && targetDate) {
+    await removeRowsForDate(
+      sheets,
+      spreadsheetId,
+      tabName,
+      targetDate,
+      targetClinic,
+    );
   }
 
   const range = `${tabName}!A1`;
