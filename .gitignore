@@ -1,6 +1,10 @@
+getjobid*.csv
+getjobid*.html
+.env
+node_modules
 getjobid258262889.csv
 getjobid258262889.html
 getjobid739206364.csv
 getjobid739206364.html
 .env
-node_modules
+node_modules/
