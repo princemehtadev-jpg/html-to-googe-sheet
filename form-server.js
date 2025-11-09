@@ -4,15 +4,20 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { execFile } = require('child_process');
 
 const PORT = process.env.PORT || 4000;
-const uploadDir = path.join(__dirname, 'uploads');
-
-ensureDirectory(uploadDir);
+const uploadRoot = path.join(os.tmpdir(), 'dallah-uploads');
+ensureDirectory(uploadRoot);
 
 const storage = multer.diskStorage({
-  destination: (_, __, cb) => cb(null, uploadDir),
+  destination: (req, _, cb) => {
+    if (!req.uploadWorkspace) {
+      req.uploadWorkspace = fs.mkdtempSync(path.join(uploadRoot, 'batch-'));
+    }
+    cb(null, req.uploadWorkspace);
+  },
   filename: (_, file, cb) => {
     const ext = path.extname(file.originalname) || '.html';
     cb(null, `${Date.now()}-${file.fieldname}${ext}`);
@@ -45,6 +50,7 @@ app.post(
     { name: 'departmentFile', maxCount: 1 },
   ]),
   async (req, res) => {
+    let workspaceDir = null;
     try {
       const revenueUpload = req.files.revenueFile?.[0] || null;
       const departmentUpload = req.files.departmentFile?.[0] || null;
@@ -55,12 +61,14 @@ app.post(
 
       const metadata = {
         clinic: req.body.clinic || '',
-        reportDate: req.body.reportDate || '',
+        reportPeriod: req.body.reportPeriod || '',
         complaints: req.body.complaints || '',
         complaintType: req.body.complaintType || '',
         remarks: req.body.remarks || '',
         referrals: req.body.referrals || '',
       };
+
+      workspaceDir = req.uploadWorkspace;
 
       const allUploads = [revenueUpload, departmentUpload].filter(Boolean);
       const csvOutputs = [];
@@ -72,13 +80,15 @@ app.post(
         csvOutputs.push(csvPath);
       }
 
-      await syncSheets(csvOutputs, metadata.clinic, metadata.reportDate);
-      await cleanupFiles([...savedInputs, ...csvOutputs]);
-
+      await syncSheets(csvOutputs, metadata.clinic, metadata.reportPeriod);
       res.send(renderSuccess(metadata, savedInputs, csvOutputs));
     } catch (error) {
       console.error(error);
       res.status(500).send(renderForm(error.message));
+    } finally {
+      if (workspaceDir) {
+        await removeDirectory(workspaceDir);
+      }
     }
   },
 );
@@ -101,36 +111,17 @@ function ensureCsv(filePath) {
     return Promise.resolve(filePath);
   }
 
-  return new Promise((resolve, reject) => {
-    execFile(
-      'node',
-      ['html-to-csv.js', filePath],
-      { cwd: __dirname },
-      (error) => {
-        if (error) {
-          reject(
-            new Error(
-              `Failed to convert ${path.basename(filePath)}: ${error.message}`,
-            ),
-          );
-          return;
-        }
-
-        const csvPath = filePath.replace(/\.html?$/i, '.csv');
-        resolve(csvPath);
-      },
-    );
-  });
+  return convertHtmlToCsv(filePath);
 }
 
-function syncSheets(csvPaths, clinicName, reportDate) {
+function syncSheets(csvPaths, clinicName, reportPeriod) {
   return new Promise((resolve, reject) => {
     const args = ['sync-to-sheets.js'];
     if (clinicName) {
       args.push('--clinic', clinicName);
     }
-    if (reportDate) {
-      args.push('--date', reportDate);
+    if (reportPeriod) {
+      args.push('--date', reportPeriod);
     }
     args.push(...csvPaths);
 
@@ -160,19 +151,111 @@ function ensureDirectory(dir) {
   }
 }
 
-async function cleanupFiles(filePaths) {
-  const uniquePaths = [...new Set(filePaths)].filter(Boolean);
-  await Promise.all(
-    uniquePaths.map(async (filePath) => {
-      try {
-        await fs.promises.unlink(filePath);
-      } catch (error) {
-        if (error.code !== 'ENOENT') {
-          console.warn(`Unable to remove ${filePath}: ${error.message}`);
-        }
+async function convertHtmlToCsv(htmlPath) {
+  const html = await fs.promises.readFile(htmlPath, 'utf8');
+  const rows = extractRows(html);
+  if (!rows.length) {
+    throw new Error(`No table data detected in ${path.basename(htmlPath)}.`);
+  }
+
+  const csv = rows.map((row) => row.map(csvEscape).join(',')).join('\n');
+  const csvPath = htmlPath.replace(/\.html?$/i, '.csv');
+  await fs.promises.writeFile(csvPath, csv, 'utf8');
+  return csvPath;
+}
+
+function extractRows(html) {
+  const rowMatches = html.match(/<tr[\s\S]*?<\/tr>/gi) || [];
+  const rows = [];
+
+  rowMatches.forEach((rowHtml) => {
+    const cellMatches = rowHtml.match(/<t[dh][^>]*>[\s\S]*?<\/t[dh]>/gi) || [];
+    if (!cellMatches.length) {
+      return;
+    }
+
+    const row = [];
+    cellMatches.forEach((cellHtml) => {
+      const text = cleanCell(cellHtml);
+      const colspan = extractSpan(cellHtml, 'colspan');
+      row.push(text);
+      for (let i = 1; i < colspan; i += 1) {
+        row.push('');
       }
-    }),
+    });
+
+    const compactRow = row.filter((cell) => cell !== '');
+    if (compactRow.length) {
+      rows.push(compactRow);
+    }
+  });
+
+  return rows;
+}
+
+function cleanCell(cellHtml) {
+  const inner = cellHtml
+    .replace(/^<t[dh][^>]*>/i, '')
+    .replace(/<\/t[dh]>$/i, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return decodeEntities(inner);
+}
+
+function extractSpan(cellHtml, attribute) {
+  const match = cellHtml.match(
+    new RegExp(`${attribute}\\s*=\\s*["']?(\\d+)`, 'i'),
   );
+  if (!match) {
+    return 1;
+  }
+  const span = Number.parseInt(match[1], 10);
+  return Number.isFinite(span) && span > 1 ? span : 1;
+}
+
+const ENTITY_MAP = {
+  nbsp: ' ',
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+};
+
+function decodeEntities(value) {
+  return value.replace(/&(#x?[0-9a-f]+|\w+);/gi, (match, entity) => {
+    const lower = entity.toLowerCase();
+    if (ENTITY_MAP[lower]) {
+      return ENTITY_MAP[lower];
+    }
+    if (lower.startsWith('#x')) {
+      return String.fromCharCode(parseInt(lower.slice(2), 16));
+    }
+    if (lower.startsWith('#')) {
+      return String.fromCharCode(parseInt(lower.slice(1), 10));
+    }
+    return match;
+  });
+}
+
+function csvEscape(value) {
+  if (value === undefined || value === null) {
+    return '';
+  }
+  const str = String(value);
+  const needsQuotes = /[",\n]/.test(str);
+  const escaped = str.replace(/"/g, '""');
+  return needsQuotes ? `"${escaped}"` : escaped;
+}
+
+async function removeDirectory(dirPath) {
+  try {
+    await fs.promises.rm(dirPath, { recursive: true, force: true });
+  } catch (error) {
+    console.warn(`Unable to remove workspace ${dirPath}: ${error.message}`);
+  }
 }
 
 function renderForm(errorMessage) {
@@ -289,8 +372,8 @@ function renderForm(errorMessage) {
         </select>
       </div>
       <div class="field">
-        <label for="reportDate">Select Date:</label>
-        <input type="date" id="reportDate" name="reportDate">
+        <label for="reportPeriod">Select Month & Year:</label>
+        <input type="month" id="reportPeriod" name="reportPeriod" min="2020-01">
       </div>
       <div class="field">
         <label for="complaints">Number of Complaints (عدد الشكاوى اليوم):</label>
@@ -322,7 +405,7 @@ function renderForm(errorMessage) {
 function renderSuccess(metadata, htmlFiles, csvFiles) {
   const rows = [
     ['Clinic', metadata.clinic || '-'],
-    ['Date', metadata.reportDate || '-'],
+    ['Month & Year', metadata.reportPeriod || '-'],
     ['Complaints', metadata.complaints || '0'],
     ['Complaint Type', metadata.complaintType || '-'],
     ['Referrals', metadata.referrals || '0'],

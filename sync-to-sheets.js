@@ -8,9 +8,10 @@ const SPREADSHEET_NAME = 'Dallah Clinics';
 const DEFAULT_SPREADSHEET_ID = '10Bhfqts3cyyjy7VP0ENA08wNdwlLRGZ9JK4QaHJ2egU';
 const BASE_REVENUE_TAB = 'Revenue';
 const BASE_DEPARTMENT_TAB = 'Department Wise';
+const UNKNOWN_LABEL = 'Unknown';
 
 async function main() {
-  const { files: fileArgs, clinicName, reportDate } = parseArgs(
+  const { files: fileArgs, clinicName, reportPeriod } = parseArgs(
     process.argv.slice(2),
   );
   const spreadsheetId =
@@ -40,26 +41,41 @@ async function main() {
   const revenueTab = buildTabName(BASE_REVENUE_TAB, clinicName);
   const departmentTab = buildTabName(BASE_DEPARTMENT_TAB, clinicName);
 
-  const datedRevenueRows = applyDateColumn(revenueRows, reportDate);
-  const datedDepartmentRows = applyDateColumn(departmentRows, reportDate);
+  const datedRevenueRows = applyDateColumn(revenueRows, reportPeriod);
+  const datedDepartmentRows = applyDateColumn(departmentRows, reportPeriod);
+  const normalizedRevenueRows = ensureColumnsHaveValues(datedRevenueRows, [
+    'doctor name',
+  ]);
+  const normalizedDepartmentRows = ensureColumnsHaveValues(
+    datedDepartmentRows,
+    ['department name', 'doctor name'],
+  );
+  const formattedRevenueRows = formatNumericColumns(
+    normalizedRevenueRows,
+    new Set(['doctor id', 'doctor name', 'department id', 'department name']),
+  );
+  const formattedDepartmentRows = formatNumericColumns(
+    normalizedDepartmentRows,
+    new Set(['doctor id', 'doctor name', 'department id', 'department name']),
+  );
 
-  if (datedRevenueRows.length) {
+  if (formattedRevenueRows.length) {
     await pushToSheet(
       sheets,
       spreadsheetId,
       revenueTab,
-      datedRevenueRows,
+      formattedRevenueRows,
     );
   } else {
     console.warn('No revenue data detected in the provided CSV files.');
   }
 
-  if (datedDepartmentRows.length) {
+  if (formattedDepartmentRows.length) {
     await pushToSheet(
       sheets,
       spreadsheetId,
       departmentTab,
-      datedDepartmentRows,
+      formattedDepartmentRows,
     );
   } else {
     console.warn('No department data detected in the provided CSV files.');
@@ -125,7 +141,7 @@ function parseCsv(filePath) {
 function parseArgs(args) {
   const files = [];
   let clinic = process.env.CLINIC_NAME || '';
-  let reportDate = process.env.REPORT_DATE || '';
+  let reportPeriod = process.env.REPORT_PERIOD || '';
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -141,13 +157,13 @@ function parseArgs(args) {
     }
 
     if (arg === '--date' && args[i + 1]) {
-      reportDate = args[i + 1];
+      reportPeriod = args[i + 1];
       i += 1;
       continue;
     }
 
     if (arg.startsWith('--date=')) {
-      reportDate = arg.split('=').slice(1).join('=');
+      reportPeriod = arg.split('=').slice(1).join('=');
       continue;
     }
 
@@ -157,7 +173,7 @@ function parseArgs(args) {
   return {
     files,
     clinicName: clinic.trim(),
-    reportDate: reportDate.trim(),
+    reportPeriod: reportPeriod.trim(),
   };
 }
 
@@ -165,32 +181,144 @@ function buildTabName(base, clinic) {
   return clinic ? `${clinic} ${base}` : base;
 }
 
-function applyDateColumn(rows, reportDate) {
-  if (!reportDate || !rows.length) {
+function applyDateColumn(rows, reportPeriod) {
+  if (!reportPeriod || !rows.length) {
     return rows;
   }
 
+  const normalizedDate = normalizePeriod(reportPeriod);
   const [header, ...dataRows] = cloneRows(rows);
   const lowerHeader = header.map((cell) => cell.trim().toLowerCase());
   const dateIndex = lowerHeader.indexOf('date');
 
   if (dateIndex === -1) {
     const newHeader = [...header, 'Date'];
-    const newRows = dataRows.map((row) => [...row, reportDate]);
+    const newRows = dataRows.map((row) => [...row, normalizedDate]);
     return [newHeader, ...newRows];
   }
 
   const updatedRows = dataRows.map((row) => {
     const copy = [...row];
-    copy[dateIndex] = reportDate;
+    copy[dateIndex] = normalizedDate;
     return copy;
   });
 
   return [header, ...updatedRows];
 }
 
+function normalizePeriod(period) {
+  const trimmed = period.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  if (/^\d{4}-\d{2}$/.test(trimmed)) {
+    return `${trimmed}-01`;
+  }
+
+  return trimmed;
+}
+
 function cloneRows(rows) {
   return rows.map((row) => [...row]);
+}
+
+function ensureColumnsHaveValues(rows, columnNames) {
+  if (!rows.length || !columnNames.length) {
+    return rows;
+  }
+
+  return columnNames.reduce(
+    (currentRows, columnName) => ensureColumnHasValue(currentRows, columnName),
+    rows,
+  );
+}
+
+function ensureColumnHasValue(rows, columnName) {
+  if (!rows.length) {
+    return rows;
+  }
+
+  const [header, ...dataRows] = rows;
+  const targetIndex = header.findIndex(
+    (cell) => cell && cell.trim().toLowerCase() === columnName,
+  );
+
+  if (targetIndex === -1) {
+    return rows;
+  }
+
+  const normalizedRows = dataRows.map((row) => {
+    const copy = [...row];
+    if (!copy[targetIndex] || !String(copy[targetIndex]).trim()) {
+      copy[targetIndex] = UNKNOWN_LABEL;
+    }
+    return copy;
+  });
+
+  return [header, ...normalizedRows];
+}
+
+function formatNumericColumns(rows, exclusionSet) {
+  if (!rows.length) {
+    return rows;
+  }
+
+  const [header, ...dataRows] = rows;
+  const numericIndices = detectNumericColumnIndices(
+    header,
+    dataRows,
+    exclusionSet,
+  );
+
+  const formattedRows = dataRows.map((row) => {
+    const copy = [...row];
+    numericIndices.forEach((index) => {
+      if (copy[index] === '' || copy[index] === undefined) {
+        copy[index] = 0;
+        return;
+      }
+
+      const normalized = Number(copy[index]);
+      copy[index] = Number.isFinite(normalized) ? normalized : 0;
+    });
+    return copy;
+  });
+
+  return [header, ...formattedRows];
+}
+
+function detectNumericColumnIndices(header, dataRows, exclusionSet) {
+  return header.reduce((indices, cell, idx) => {
+    const key = cell ? cell.trim().toLowerCase() : '';
+    if (!key || exclusionSet.has(key)) {
+      return indices;
+    }
+
+    let seenNumeric = false;
+    let seenNonNumeric = false;
+
+    for (let i = 0; i < dataRows.length; i += 1) {
+      const value = dataRows[i][idx];
+      if (value === undefined || value === '') {
+        continue;
+      }
+
+      const numericValue = Number(value);
+      if (Number.isFinite(numericValue)) {
+        seenNumeric = true;
+      } else {
+        seenNonNumeric = true;
+        break;
+      }
+    }
+
+    if (seenNumeric && !seenNonNumeric) {
+      indices.push(idx);
+    }
+
+    return indices;
+  }, []);
 }
 
 function splitCsvLine(line) {
@@ -228,20 +356,44 @@ function cleanCellValue(value) {
 }
 
 async function pushToSheet(sheets, spreadsheetId, tabName, rows) {
+  if (!rows.length) {
+    return;
+  }
+
   const range = `${tabName}!A1`;
-  console.log(`Updating "${tabName}" with ${rows.length} rows...`);
+  let hasExistingData = false;
 
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId,
-    range: `${tabName}!A:ZZ`,
-  });
+  try {
+    const existing = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${tabName}!1:1`,
+    });
+    hasExistingData =
+      Array.isArray(existing.data.values) && existing.data.values.length > 0;
+  } catch (error) {
+    // If the sheet or range does not exist yet, we'll treat it as empty.
+    if (error.code !== 400 && error.code !== 404) {
+      throw error;
+    }
+  }
 
-  await sheets.spreadsheets.values.update({
+  const valuesToAppend = hasExistingData ? rows.slice(1) : rows;
+  if (!valuesToAppend.length) {
+    console.log(`No new rows to append for "${tabName}".`);
+    return;
+  }
+
+  console.log(
+    `Appending ${valuesToAppend.length} row(s) to "${tabName}" (header preserved: ${hasExistingData}).`,
+  );
+
+  await sheets.spreadsheets.values.append({
     spreadsheetId,
     range,
-    valueInputOption: 'RAW',
+    valueInputOption: 'USER_ENTERED',
+    insertDataOption: 'INSERT_ROWS',
     requestBody: {
-      values: rows,
+      values: valuesToAppend,
     },
   });
 }
