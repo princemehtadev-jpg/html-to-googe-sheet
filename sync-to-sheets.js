@@ -45,11 +45,17 @@ async function main() {
   const auth = await createServiceAccountAuth();
   const sheets = google.sheets({ version: 'v4', auth });
 
-  const revenueTab = buildTabName(BASE_REVENUE_TAB, clinicName);
-  const departmentTab = buildTabName(BASE_DEPARTMENT_TAB, clinicName);
+  const revenueTab = BASE_REVENUE_TAB;
+  const departmentTab = BASE_DEPARTMENT_TAB;
 
-  const datedRevenueRows = applyDateColumn(revenueRows, reportPeriod);
-  const datedDepartmentRows = applyDateColumn(departmentRows, reportPeriod);
+  const datedRevenueRows = applyClinicColumn(
+    applyDateColumn(revenueRows, reportPeriod),
+    clinicName,
+  );
+  const datedDepartmentRows = applyClinicColumn(
+    applyDateColumn(departmentRows, reportPeriod),
+    clinicName,
+  );
   const normalizedRevenueRows = ensureColumnsHaveValues(datedRevenueRows, [
     'doctor name',
   ]);
@@ -270,10 +276,6 @@ async function appendOtherMetricsRow(
   ]);
 }
 
-function buildTabName(base, clinic) {
-  return clinic ? `${clinic} ${base}` : base;
-}
-
 function applyDateColumn(rows, reportPeriod) {
   if (!reportPeriod || !rows.length) {
     return rows;
@@ -285,14 +287,39 @@ function applyDateColumn(rows, reportPeriod) {
   const dateIndex = lowerHeader.indexOf('date');
 
   if (dateIndex === -1) {
-    const newHeader = [...header, 'Date'];
-    const newRows = dataRows.map((row) => [...row, normalizedDate]);
+    const newHeader = ['Date', ...header];
+    const newRows = dataRows.map((row) => [normalizedDate, ...row]);
     return [newHeader, ...newRows];
   }
 
   const updatedRows = dataRows.map((row) => {
     const copy = [...row];
     copy[dateIndex] = normalizedDate;
+    return copy;
+  });
+
+  return [header, ...updatedRows];
+}
+
+function applyClinicColumn(rows, clinicName) {
+  if (!rows.length) {
+    return rows;
+  }
+
+  const normalizedClinic = clinicName ? clinicName.trim() : UNKNOWN_LABEL;
+  const [header, ...dataRows] = cloneRows(rows);
+  const lowerHeader = header.map((cell) => cell.trim().toLowerCase());
+  const clinicIndex = lowerHeader.indexOf('clinic');
+
+  if (clinicIndex === -1) {
+    const newHeader = ['Clinic', ...header];
+    const newRows = dataRows.map((row) => [normalizedClinic, ...row]);
+    return [newHeader, ...newRows];
+  }
+
+  const updatedRows = dataRows.map((row) => {
+    const copy = [...row];
+    copy[clinicIndex] = normalizedClinic;
     return copy;
   });
 
