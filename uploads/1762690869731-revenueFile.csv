@@ -1,0 +1,6 @@
+Doctor ID,Doctor Name,Consultation,Laboratory,Radiology,Medications,Services,In-patients,Cash,Credit
+90001,John Doe,1200.5,340.0,0.0,150.75,80.0,0.0,1771.25,0.0
+90002,Jane Smith,0.0,210.2,75.0,0.0,0.0,0.0,285.2,0.0
+90003,Ali Hassan,560.0,0.0,0.0,45.6,120.0,0.0,725.6,0.0
+90004,Maria Lopez,2600.0,980.4,220.0,310.5,90.0,0.0,4200.9,0.0
+90005,Chen Wei,0.0,0.0,0.0,0.0,35.0,0.0,35.0,0.0

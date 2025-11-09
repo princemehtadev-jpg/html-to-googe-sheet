@@ -72,7 +72,7 @@ app.post(
         csvOutputs.push(csvPath);
       }
 
-      await syncSheets(csvOutputs);
+      await syncSheets(csvOutputs, metadata.clinic, metadata.reportDate);
       await cleanupFiles([...savedInputs, ...csvOutputs]);
 
       res.send(renderSuccess(metadata, savedInputs, csvOutputs));
@@ -123,11 +123,20 @@ function ensureCsv(filePath) {
   });
 }
 
-function syncSheets(csvPaths) {
+function syncSheets(csvPaths, clinicName, reportDate) {
   return new Promise((resolve, reject) => {
+    const args = ['sync-to-sheets.js'];
+    if (clinicName) {
+      args.push('--clinic', clinicName);
+    }
+    if (reportDate) {
+      args.push('--date', reportDate);
+    }
+    args.push(...csvPaths);
+
     execFile(
       'node',
-      ['sync-to-sheets.js', ...csvPaths],
+      args,
       { cwd: __dirname },
       (error, stdout, stderr) => {
         if (error) {

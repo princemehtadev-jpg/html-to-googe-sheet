@@ -6,11 +6,13 @@ const { google } = require('googleapis');
 
 const SPREADSHEET_NAME = 'Dallah Clinics';
 const DEFAULT_SPREADSHEET_ID = '10Bhfqts3cyyjy7VP0ENA08wNdwlLRGZ9JK4QaHJ2egU';
-const REVENUE_TAB = 'Revenue';
-const DEPARTMENT_TAB = 'Department Wise';
+const BASE_REVENUE_TAB = 'Revenue';
+const BASE_DEPARTMENT_TAB = 'Department Wise';
 
 async function main() {
-  const [, ...fileArgs] = process.argv.slice(2);
+  const { files: fileArgs, clinicName, reportDate } = parseArgs(
+    process.argv.slice(2),
+  );
   const spreadsheetId =
     process.env.SPREADSHEET_ID || DEFAULT_SPREADSHEET_ID;
   if (!spreadsheetId) {
@@ -35,14 +37,30 @@ async function main() {
   const auth = await createServiceAccountAuth();
   const sheets = google.sheets({ version: 'v4', auth });
 
-  if (revenueRows.length) {
-    await pushToSheet(sheets, spreadsheetId, REVENUE_TAB, revenueRows);
+  const revenueTab = buildTabName(BASE_REVENUE_TAB, clinicName);
+  const departmentTab = buildTabName(BASE_DEPARTMENT_TAB, clinicName);
+
+  const datedRevenueRows = applyDateColumn(revenueRows, reportDate);
+  const datedDepartmentRows = applyDateColumn(departmentRows, reportDate);
+
+  if (datedRevenueRows.length) {
+    await pushToSheet(
+      sheets,
+      spreadsheetId,
+      revenueTab,
+      datedRevenueRows,
+    );
   } else {
     console.warn('No revenue data detected in the provided CSV files.');
   }
 
-  if (departmentRows.length) {
-    await pushToSheet(sheets, spreadsheetId, DEPARTMENT_TAB, departmentRows);
+  if (datedDepartmentRows.length) {
+    await pushToSheet(
+      sheets,
+      spreadsheetId,
+      departmentTab,
+      datedDepartmentRows,
+    );
   } else {
     console.warn('No department data detected in the provided CSV files.');
   }
@@ -87,12 +105,12 @@ function appendDataset(target, rows) {
   }
 
   if (!target.length) {
-    target.push(...rows);
+    target.push(...cloneRows(rows));
     return;
   }
 
   const [, ...dataRows] = rows;
-  target.push(...dataRows);
+  target.splice(target.length, 0, ...cloneRows(dataRows));
 }
 
 function parseCsv(filePath) {
@@ -102,6 +120,77 @@ function parseCsv(filePath) {
     .map((line) => line.trim())
     .filter((line) => line.length)
     .map((line) => splitCsvLine(line));
+}
+
+function parseArgs(args) {
+  const files = [];
+  let clinic = process.env.CLINIC_NAME || '';
+  let reportDate = process.env.REPORT_DATE || '';
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--clinic' && args[i + 1]) {
+      clinic = args[i + 1];
+      i += 1;
+      continue;
+    }
+
+    if (arg.startsWith('--clinic=')) {
+      clinic = arg.split('=').slice(1).join('=');
+      continue;
+    }
+
+    if (arg === '--date' && args[i + 1]) {
+      reportDate = args[i + 1];
+      i += 1;
+      continue;
+    }
+
+    if (arg.startsWith('--date=')) {
+      reportDate = arg.split('=').slice(1).join('=');
+      continue;
+    }
+
+    files.push(arg);
+  }
+
+  return {
+    files,
+    clinicName: clinic.trim(),
+    reportDate: reportDate.trim(),
+  };
+}
+
+function buildTabName(base, clinic) {
+  return clinic ? `${clinic} ${base}` : base;
+}
+
+function applyDateColumn(rows, reportDate) {
+  if (!reportDate || !rows.length) {
+    return rows;
+  }
+
+  const [header, ...dataRows] = cloneRows(rows);
+  const lowerHeader = header.map((cell) => cell.trim().toLowerCase());
+  const dateIndex = lowerHeader.indexOf('date');
+
+  if (dateIndex === -1) {
+    const newHeader = [...header, 'Date'];
+    const newRows = dataRows.map((row) => [...row, reportDate]);
+    return [newHeader, ...newRows];
+  }
+
+  const updatedRows = dataRows.map((row) => {
+    const copy = [...row];
+    copy[dateIndex] = reportDate;
+    return copy;
+  });
+
+  return [header, ...updatedRows];
+}
+
+function cloneRows(rows) {
+  return rows.map((row) => [...row]);
 }
 
 function splitCsvLine(line) {
