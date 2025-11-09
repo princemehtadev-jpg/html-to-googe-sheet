@@ -3,10 +3,14 @@
   "version": "1.0.0",
   "main": "html-to-csv.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "sync:sheets": "node sync-to-sheets.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": ""
+  "description": "",
+  "dependencies": {
+    "googleapis": "^165.0.0"
+  }
 }

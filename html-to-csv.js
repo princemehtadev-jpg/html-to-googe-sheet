@@ -121,6 +121,8 @@ function normalizeDepartmentReport(rows) {
   const result = [];
   let currentDepartment = null;
   let metricsHeader = null;
+  let metricsCount = 0;
+  const departmentState = new Map();
 
   rows.forEach((row) => {
     if (isDepartmentRow(row)) {
@@ -130,6 +132,7 @@ function normalizeDepartmentReport(rows) {
 
     if (row[0] && row[0].trim().toLowerCase() === 'doctor name') {
       metricsHeader = row.slice(1);
+      metricsCount = metricsHeader.length;
       if (metricsHeader.length && !result.length) {
         result.push([
           'Department ID',
@@ -150,17 +153,48 @@ function normalizeDepartmentReport(rows) {
       return;
     }
 
-    const doctorInfo = parseIdAndName(row[0]);
-    if (!doctorInfo) {
+    const parsedDoctor = parseIdAndName(row[0]);
+    let doctorId = '';
+    let doctorName = '';
+    let metricCells;
+
+    if (row.length === metricsCount) {
+      metricCells = row.slice(0, metricsCount);
+    } else if (parsedDoctor) {
+      doctorId = parsedDoctor.id;
+      doctorName = parsedDoctor.name;
+      metricCells = row.slice(1);
+    } else {
+      doctorName = row[0] || '';
+      metricCells = row.slice(1);
+    }
+
+    if (!metricCells.length) {
       return;
     }
+
+    const departmentId = currentDepartment.id;
+    const state =
+      departmentState.get(departmentId) || { doctors: 0, summaryAdded: false };
+    const hasDoctorData = doctorId || doctorName;
+
+    if (!hasDoctorData) {
+      if (state.summaryAdded || state.doctors > 0) {
+        departmentState.set(departmentId, state);
+        return;
+      }
+      state.summaryAdded = true;
+    } else {
+      state.doctors += 1;
+    }
+    departmentState.set(departmentId, state);
 
     result.push([
       currentDepartment.id,
       currentDepartment.name,
-      doctorInfo.id,
-      doctorInfo.name,
-      ...row.slice(1),
+      doctorId,
+      doctorName,
+      ...padMetrics(metricCells, metricsCount),
     ]);
   });
 
@@ -185,6 +219,14 @@ function parseIdAndName(value) {
     id: match[1],
     name: match[2].trim(),
   };
+}
+
+function padMetrics(cells, desiredLength) {
+  const padded = cells.slice(0, desiredLength);
+  while (padded.length < desiredLength) {
+    padded.push('');
+  }
+  return padded;
 }
 
 function cleanCell(cellHtml) {
