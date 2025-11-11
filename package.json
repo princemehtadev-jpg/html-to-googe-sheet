@@ -2,6 +2,7 @@
   "name": "html-to-csv",
   "version": "1.0.0",
   "main": "html-to-csv.js",
+  "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "sync:sheets": "node sync-to-sheets.js",

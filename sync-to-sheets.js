@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-const fs = require('fs');
-const path = require('path');
-const { google } = require('googleapis');
+import fs from 'fs';
+import path from 'path';
+import { google } from 'googleapis';
 
 const SPREADSHEET_NAME = 'Dallah Clinics';
 const DEFAULT_SPREADSHEET_ID = '10Bhfqts3cyyjy7VP0ENA08wNdwlLRGZ9JK4QaHJ2egU';
@@ -605,10 +605,10 @@ async function pushToSheet(sheets, spreadsheetId, tabName, rows) {
 }
 
 async function createServiceAccountAuth() {
-  const serviceAccountPath = path.resolve(process.cwd(), '.env');
+  const serviceAccountPath = path.resolve(process.cwd(), 'credentials.json');
   if (!fs.existsSync(serviceAccountPath)) {
     throw new Error(
-      'Missing .env service account file. Place the JSON credentials inside .env.',
+      'Missing credentials.json. Download your Google service account JSON and place it at project root as credentials.json.',
     );
   }
 
@@ -618,7 +618,7 @@ async function createServiceAccountAuth() {
     credentials = JSON.parse(raw);
   } catch (error) {
     throw new Error(
-      'Unable to parse .env. Ensure it contains valid JSON for the service account.',
+      'Unable to parse credentials.json. Ensure it contains valid JSON for the service account.',
     );
   }
 
