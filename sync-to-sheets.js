@@ -171,7 +171,7 @@ function parseArgs(args) {
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (arg === '--clinic' && args[i + 1]) {
+    if (arg === '--clinic' && i + 1 < args.length) {
       clinic = args[i + 1];
       i += 1;
       continue;
@@ -182,7 +182,7 @@ function parseArgs(args) {
       continue;
     }
 
-    if (arg === '--date' && args[i + 1]) {
+    if (arg === '--date' && i + 1 < args.length) {
       reportPeriod = args[i + 1];
       i += 1;
       continue;
@@ -193,7 +193,7 @@ function parseArgs(args) {
       continue;
     }
 
-    if (arg === '--medical' && args[i + 1]) {
+    if (arg === '--medical' && i + 1 < args.length) {
       medical = args[i + 1];
       i += 1;
       continue;
@@ -204,7 +204,7 @@ function parseArgs(args) {
       continue;
     }
 
-    if (arg === '--administrative' && args[i + 1]) {
+    if (arg === '--administrative' && i + 1 < args.length) {
       administrative = args[i + 1];
       i += 1;
       continue;
@@ -215,7 +215,7 @@ function parseArgs(args) {
       continue;
     }
 
-    if (arg === '--referrals' && args[i + 1]) {
+    if (arg === '--referrals' && i + 1 < args.length) {
       referrals = args[i + 1];
       i += 1;
       continue;
@@ -226,7 +226,7 @@ function parseArgs(args) {
       continue;
     }
 
-    if (arg === '--remarks' && args[i + 1]) {
+    if (arg === '--remarks' && i + 1 < args.length) {
       remarks = args[i + 1];
       i += 1;
       continue;

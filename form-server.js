@@ -4,7 +4,6 @@ import express from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import os from 'os';
 import { execFile } from 'child_process';
 import { fileURLToPath } from 'url';
 
@@ -12,7 +11,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = process.env.PORT || 4000;
-const uploadRoot = path.join(os.tmpdir(), 'dallah-uploads');
+const uploadRoot = path.join(__dirname, 'uploads');
 ensureDirectory(uploadRoot);
 
 const storage = multer.diskStorage({
@@ -59,12 +58,19 @@ app.post(
       const revenueUpload = req.files.revenueFile?.[0] || null;
       const departmentUpload = req.files.departmentFile?.[0] || null;
 
-      if (!revenueUpload && !departmentUpload) {
-        throw new Error('Please upload at least one HTML report.');
+      // Require both files
+      if (!revenueUpload || !departmentUpload) {
+        throw new Error('Please upload both Revenue and Department reports.');
+      }
+
+      // Require clinic selection
+      const clinic = sanitizeText(req.body.clinic);
+      if (!clinic) {
+        throw new Error('Please select a clinic.');
       }
 
       const metadata = {
-        clinic: sanitizeText(req.body.clinic),
+        clinic,
         reportPeriod: (req.body.reportPeriod || '').trim(),
         complaintsMedical: normalizeNumber(req.body.complaintsMedical),
         complaintsAdministrative: normalizeNumber(
@@ -92,9 +98,6 @@ app.post(
       console.error(error);
       res.status(500).send(renderForm(error.message));
     } finally {
-      if (workspaceDir) {
-        await removeDirectory(workspaceDir);
-      }
     }
   },
 );
@@ -132,7 +135,8 @@ function syncSheets(csvPaths, metadata) {
     args.push('--medical', metadata.complaintsMedical);
     args.push('--administrative', metadata.complaintsAdministrative);
     args.push('--referrals', metadata.referrals);
-    args.push('--remarks', metadata.remarks);
+    // Pass remarks using --remarks= to support empty string safely
+    args.push(`--remarks=${metadata.remarks || ''}`);
     args.push(...csvPaths);
 
     execFile(
@@ -365,15 +369,16 @@ function renderForm(errorMessage) {
     <form action="/submit" method="post" enctype="multipart/form-data">
       <div class="field">
         <label for="revenueFile">Select Revenue File:</label>
-        <input type="file" id="revenueFile" name="revenueFile" accept=".html,.htm,.csv">
+        <input type="file" id="revenueFile" name="revenueFile" accept=".html,.htm,.csv" required>
       </div>
       <div class="field">
         <label for="departmentFile">Select Department File:</label>
-        <input type="file" id="departmentFile" name="departmentFile" accept=".html,.htm,.csv">
+        <input type="file" id="departmentFile" name="departmentFile" accept=".html,.htm,.csv" required>
       </div>
       <div class="field">
         <label for="clinic">Select Clinic:</label>
-        <select id="clinic" name="clinic">
+        <select id="clinic" name="clinic" required>
+          <option value="" selected disabled hidden>Select clinic</option>
           <option value="Al Yarmouk">Al Yarmouk</option>
           <option value="Qurtubah">Qurtubah</option>
           <option value="Al Salam">Al Salam</option>
