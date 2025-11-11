@@ -14,6 +14,8 @@ const UNKNOWN_LABEL = 'Unknown';
 async function main() {
   const {
     files: fileArgs,
+    revenueFiles: revenueArgFiles,
+    departmentFiles: departmentArgFiles,
     clinicName,
     reportPeriod,
     medicalComplaints,
@@ -30,13 +32,34 @@ async function main() {
     process.exit(1);
   }
 
-  const csvFiles = fileArgs.length ? fileArgs : discoverCsvFiles();
+  // Build explicit mapping when files were provided via --revenue/--department flags
+  const explicitMap = new Map();
+  const allInputFiles = [];
+
+  const addWithKind = (kind, list) => {
+    list.forEach((p) => {
+      const abs = path.resolve(process.cwd(), p);
+      allInputFiles.push(abs);
+      explicitMap.set(abs, kind);
+    });
+  };
+
+  addWithKind('revenue', revenueArgFiles);
+  addWithKind('department', departmentArgFiles);
+
+  // Add any positional files (no explicit kind)
+  fileArgs.forEach((p) => {
+    const abs = path.resolve(process.cwd(), p);
+    allInputFiles.push(abs);
+  });
+
+  const csvFiles = allInputFiles.length ? allInputFiles : discoverCsvFiles();
   if (!csvFiles.length) {
     console.error('No CSV files provided or found.');
     process.exit(1);
   }
 
-  const { revenueRows, departmentRows } = loadDatasets(csvFiles);
+  const { revenueRows, departmentRows } = loadDatasets(csvFiles, explicitMap);
   if (!revenueRows.length && !departmentRows.length) {
     console.error('No CSV data available to push.');
     process.exit(1);
@@ -115,19 +138,38 @@ function discoverCsvFiles() {
     .map((file) => path.resolve(process.cwd(), file));
 }
 
-function loadDatasets(files) {
+function loadDatasets(files, explicitKindMap = new Map()) {
   const revenueRows = [];
   const departmentRows = [];
 
   files.forEach((file) => {
-    const rows = parseCsv(file);
+    let rows = parseCsv(file);
     if (!rows.length) {
       return;
     }
 
-    const header = rows[0].map((cell) => cell.trim().toLowerCase());
-    const isDepartmentData = header.includes('department id');
-    if (isDepartmentData) {
+    // Try to locate the actual header row (first row containing Doctor Name or Doctor ID)
+    const headerRowIndex = rows.findIndex((r) =>
+      r.some((c) => {
+        const v = String(c || '').trim().toLowerCase();
+        return v === 'doctor name' || v === 'doctor id';
+      }),
+    );
+
+    if (headerRowIndex > 0) {
+      rows = rows.slice(headerRowIndex);
+    }
+
+    // Clean up rows: remove section titles and repeated headers and totals
+    rows = sanitizeRows(rows);
+    if (!rows.length) {
+      return;
+    }
+
+    const abs = path.resolve(process.cwd(), file);
+    const explicitKind = explicitKindMap.get(abs) || explicitKindMap.get(file);
+    const kind = explicitKind || detectDatasetKind(file, rows[0]);
+    if (kind === 'department') {
       appendDataset(departmentRows, rows);
     } else {
       appendDataset(revenueRows, rows);
@@ -135,6 +177,76 @@ function loadDatasets(files) {
   });
 
   return { revenueRows, departmentRows };
+}
+
+function detectDatasetKind(filePath, headerRow) {
+  const file = path.basename(filePath).toLowerCase();
+  const header = headerRow.map((c) => String(c || '').trim().toLowerCase());
+
+  // Strong filename hints from uploader fields
+  if (file.includes('department')) return 'department';
+  if (file.includes('revenue')) return 'revenue';
+
+  // Heuristics based on common columns
+  const hasDoctorId = header.includes('doctor id');
+  const hasConsultation = header.includes('consultation');
+  const hasLaboratory = header.includes('laboratory');
+  const hasTotal = header.includes('total');
+  const hasNew = header.includes('new');
+  const hasCons = header.includes('cons');
+
+  if (hasDoctorId || hasConsultation || hasLaboratory) return 'revenue';
+  if (hasTotal && (hasNew || hasCons)) return 'department';
+
+  // Default to revenue if unsure, as revenue files are usually well-formed
+  return 'revenue';
+}
+
+function sanitizeRows(rows) {
+  if (!rows.length) return rows;
+
+  const [header, ...data] = rows;
+  const lowerHeader = header.map((c) => String(c || '').trim().toLowerCase());
+
+  // Remove repeated header rows and non-data lines like department titles or totals
+  const isHeaderRow = (row) => {
+    const lower = row.map((c) => String(c || '').trim().toLowerCase());
+    return (
+      arraysEqual(lower, lowerHeader) ||
+      lower[0] === 'doctor name' ||
+      lower[0] === 'doctor id'
+    );
+  };
+
+  const isSectionTitle = (row) => {
+    // Single-cell row like "20268 - Family Medicine - Y"
+    if (row.length !== 1) return false;
+    const v = String(row[0] || '').trim();
+    return /^(\d+)\s*-/.test(v);
+  };
+
+  const isTotalRow = (row) => {
+    const v = String(row[0] || '').trim().toLowerCase();
+    return v === 'total:' || v === 'total';
+  };
+
+  const cleaned = data.filter((row) => {
+    if (!row || !row.length) return false;
+    if (isSectionTitle(row)) return false;
+    if (isHeaderRow(row)) return false;
+    if (isTotalRow(row)) return false;
+    return true;
+  });
+
+  return [header, ...cleaned];
+}
+
+function arraysEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 function appendDataset(target, rows) {
@@ -162,6 +274,8 @@ function parseCsv(filePath) {
 
 function parseArgs(args) {
   const files = [];
+  const revenueFiles = [];
+  const departmentFiles = [];
   let clinic = process.env.CLINIC_NAME || '';
   let reportPeriod = process.env.REPORT_PERIOD || '';
   let medical = process.env.MEDICAL_COMPLAINTS || '';
@@ -171,6 +285,25 @@ function parseArgs(args) {
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
+    // Explicit file role flags
+    if (arg === '--revenue' && i + 1 < args.length) {
+      revenueFiles.push(args[i + 1]);
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--revenue=')) {
+      revenueFiles.push(arg.split('=').slice(1).join('='));
+      continue;
+    }
+    if (arg === '--department' && i + 1 < args.length) {
+      departmentFiles.push(args[i + 1]);
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--department=')) {
+      departmentFiles.push(arg.split('=').slice(1).join('='));
+      continue;
+    }
     if (arg === '--clinic' && i + 1 < args.length) {
       clinic = args[i + 1];
       i += 1;
@@ -242,6 +375,8 @@ function parseArgs(args) {
 
   return {
     files,
+    revenueFiles,
+    departmentFiles,
     clinicName: clinic.trim(),
     reportPeriod: reportPeriod.trim(),
     medicalComplaints: medical.trim(),

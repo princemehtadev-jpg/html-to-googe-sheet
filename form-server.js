@@ -82,17 +82,12 @@ app.post(
 
       workspaceDir = req.uploadWorkspace;
 
-      const allUploads = [revenueUpload, departmentUpload].filter(Boolean);
-      const csvOutputs = [];
-      const savedInputs = [];
+      const savedInputs = [revenueUpload.path, departmentUpload.path];
+      const revenueCsv = await ensureCsv(revenueUpload.path);
+      const departmentCsv = await ensureCsv(departmentUpload.path);
+      const csvOutputs = [revenueCsv, departmentCsv];
 
-      for (const uploadFile of allUploads) {
-        savedInputs.push(uploadFile.path);
-        const csvPath = await ensureCsv(uploadFile.path);
-        csvOutputs.push(csvPath);
-      }
-
-      await syncSheets(csvOutputs, metadata);
+      await syncSheets({ revenueCsv, departmentCsv }, metadata);
       res.send(renderSuccess(metadata, savedInputs, csvOutputs));
     } catch (error) {
       console.error(error);
@@ -123,7 +118,7 @@ function ensureCsv(filePath) {
   return convertHtmlToCsv(filePath);
 }
 
-function syncSheets(csvPaths, metadata) {
+function syncSheets(paths, metadata) {
   return new Promise((resolve, reject) => {
     const args = ['sync-to-sheets.js'];
     if (metadata.clinic) {
@@ -137,7 +132,14 @@ function syncSheets(csvPaths, metadata) {
     args.push('--referrals', metadata.referrals);
     // Pass remarks using --remarks= to support empty string safely
     args.push(`--remarks=${metadata.remarks || ''}`);
-    args.push(...csvPaths);
+
+    // Pass files with explicit roles to avoid misclassification
+    if (paths?.revenueCsv) {
+      args.push('--revenue', paths.revenueCsv);
+    }
+    if (paths?.departmentCsv) {
+      args.push('--department', paths.departmentCsv);
+    }
 
     execFile(
       'node',
