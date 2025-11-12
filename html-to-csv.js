@@ -92,8 +92,8 @@ function compressRow(row) {
 
 function normalizeRows(rows) {
   const cleaned = rows.filter((row) => !isTotalsRow(row));
-  if (looksLikeDepartmentReport(cleaned)) {
-    return normalizeDepartmentReport(cleaned);
+  if (looksLikeDepartmentReport(rows)) {
+    return normalizeDepartmentReport(rows);
   }
 
   return cleaned;
@@ -126,10 +126,14 @@ function normalizeDepartmentReport(rows) {
   const result = [];
   let currentDepartment = null;
   let metricsHeader = null;
+  let lastRowWasTotals = false;
+  let hasDoctorDataInCurrentDept = false;
 
   rows.forEach((row) => {
     if (isDepartmentRow(row)) {
       currentDepartment = parseDepartment(row[0]);
+      lastRowWasTotals = false;
+      hasDoctorDataInCurrentDept = false;
       return;
     }
 
@@ -144,6 +148,8 @@ function normalizeDepartmentReport(rows) {
           ...metricsHeader,
         ]);
       }
+      lastRowWasTotals = false;
+      hasDoctorDataInCurrentDept = false;
       return;
     }
 
@@ -152,18 +158,34 @@ function normalizeDepartmentReport(rows) {
     }
 
     if (isTotalsRow(row)) {
+      lastRowWasTotals = true;
       return;
     }
 
-    const doctorInfo = parseDoctor(row[0]);
+    const numericOnlyRow = isNumericOnlyRow(row);
+
+    if (
+      numericOnlyRow &&
+      (lastRowWasTotals || (hasDoctorDataInCurrentDept && !rowIncludesText(row)))
+    ) {
+      // Skip rollups that appear after totals or after we've already captured doctor rows.
+      return;
+    }
+
+    const dataRow =
+      metricsHeader && row.length === metricsHeader.length ? ['', ...row] : row;
+
+    const doctorInfo = parseDoctor(dataRow[0]);
 
     result.push([
       (currentDepartment && currentDepartment.id) || UNKNOWN_LABEL,
       (currentDepartment && currentDepartment.name) || UNKNOWN_LABEL,
       doctorInfo.id,
       doctorInfo.name,
-      ...row.slice(1),
+      ...dataRow.slice(1),
     ]);
+    lastRowWasTotals = false;
+    hasDoctorDataInCurrentDept = true;
   });
 
   return result.length ? result : rows;
@@ -171,6 +193,18 @@ function normalizeDepartmentReport(rows) {
 
 function isDepartmentRow(row) {
   return row.length === 1 && !!parseIdAndName(row[0]);
+}
+
+function rowIncludesText(row) {
+  return row.some((cell) => /[a-z]/i.test(cell));
+}
+
+function isNumericOnlyRow(row) {
+  if (!row || !row.length) {
+    return false;
+  }
+
+  return row.every((cell) => cell === '' || /^[\d\s.,-]+$/.test(cell));
 }
 
 function parseIdAndName(value) {
