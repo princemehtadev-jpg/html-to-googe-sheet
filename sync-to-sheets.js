@@ -5,7 +5,7 @@ const path = require('path');
 const { google } = require('googleapis');
 
 const SPREADSHEET_NAME = 'Dallah Clinics';
-const DEFAULT_SPREADSHEET_ID = '10Bhfqts3cyyjy7VP0ENA08wNdwlLRGZ9JK4QaHJ2egU';
+const DEFAULT_SPREADSHEET_ID = '1jO6NiZ-uAVnwyUIFSegJgiuJyuTdgDvOjtFQA7ZIDC8';
 const BASE_REVENUE_TAB = 'Revenue';
 const BASE_DEPARTMENT_TAB = 'Department Wise';
 const OTHER_TAB = 'Other';
@@ -56,8 +56,10 @@ async function main() {
     normalizedRevenueRows,
     new Set(['date', 'doctor id', 'doctor name', 'department id', 'department name'])
   );
+
+  const departmentRowsWithoutTotals = dropLastDataRow(normalizedDepartmentRows);
   const formattedDepartmentRows = formatNumericColumns(
-    normalizedDepartmentRows,
+    departmentRowsWithoutTotals,
     new Set(['date', 'doctor id', 'doctor name', 'department id', 'department name'])
   );
 
@@ -282,6 +284,12 @@ function normalizePeriod(period) {
 
 function cloneRows(rows) {
   return rows.map((row) => [...row]);
+}
+
+function dropLastDataRow(rows) {
+  if (rows.length <= 1) return rows;
+  // assume final row is a totals summary that should not reach Sheets
+  return rows.slice(0, -1);
 }
 
 function ensureColumnsHaveValues(rows, columnNames) {
