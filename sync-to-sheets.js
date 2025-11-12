@@ -186,6 +186,7 @@ async function appendOtherMetricsRow(
   if (!clinicName || !reportPeriod) return;
 
   const normalizedDate = normalizePeriod(reportPeriod);
+  const header = ['Date', 'Clinic', 'Medical Complaints', 'Administrative Complaints', 'Referrals', 'Remarks'];
   const row = [
     normalizedDate,
     clinicName,
@@ -195,11 +196,12 @@ async function appendOtherMetricsRow(
     remarks || '',
   ];
 
-  await pushToSheet(sheets, spreadsheetId, OTHER_TAB, [
-    ['Date', 'Clinic', 'Medical Complaints', 'Administrative Complaints', 'Referrals', 'Remarks'],
-    row,
-  ]);
+  await pushToSheet(sheets, spreadsheetId, OTHER_TAB, [header, row]);
+
+  // 👇 ensure the Date column in "Other" is formatted as a Date
+  await ensureDateColumnFormat(sheets, spreadsheetId, OTHER_TAB, header);
 }
+
 
 function applyDateColumn(rows, reportPeriod) {
   if (!reportPeriod || !rows.length) return rows;
@@ -511,7 +513,6 @@ async function createServiceAccountAuth() {
 }
 
 // ---------------- DATE COLUMN FORMAT HELPERS ----------------
-
 async function getSheetIdByTitle(sheets, spreadsheetId, title) {
   const meta = await sheets.spreadsheets.get({
     spreadsheetId,
