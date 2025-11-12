@@ -83,8 +83,8 @@ app.post(
       workspaceDir = req.uploadWorkspace;
 
       const savedInputs = [revenueUpload.path, departmentUpload.path];
-      const revenueCsv = await ensureCsv(revenueUpload.path);
-      const departmentCsv = await ensureCsv(departmentUpload.path);
+      const revenueCsv = await ensureCsv(revenueUpload.path, 'revenue');
+      const departmentCsv = await ensureCsv(departmentUpload.path, 'department');
       const csvOutputs = [revenueCsv, departmentCsv];
 
       await syncSheets({ revenueCsv, departmentCsv }, metadata);
@@ -109,13 +109,13 @@ app.listen(PORT, () => {
   console.log(`Form server running on http://localhost:${PORT}`);
 });
 
-function ensureCsv(filePath) {
+function ensureCsv(filePath, kind = null) {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === '.csv') {
     return Promise.resolve(filePath);
   }
 
-  return convertHtmlToCsv(filePath);
+  return convertHtmlToCsv(filePath, kind);
 }
 
 function syncSheets(paths, metadata) {
@@ -167,14 +167,17 @@ function ensureDirectory(dir) {
   }
 }
 
-async function convertHtmlToCsv(htmlPath) {
+async function convertHtmlToCsv(htmlPath, kind = null) {
   const html = await fs.promises.readFile(htmlPath, 'utf8');
   const rows = extractRows(html);
   if (!rows.length) {
     throw new Error(`No table data detected in ${path.basename(htmlPath)}.`);
   }
 
-  const csv = rows.map((row) => row.map(csvEscape).join(',')).join('\n');
+  const csv =
+    kind === 'department'
+      ? toDepartmentCsv(rows)
+      : rows.map((row) => row.map(csvEscape).join(',')).join('\n');
   const csvPath = htmlPath.replace(/\.html?$/i, '.csv');
   await fs.promises.writeFile(csvPath, csv, 'utf8');
   return csvPath;
@@ -200,13 +203,103 @@ function extractRows(html) {
       }
     });
 
-    const compactRow = row.filter((cell) => cell !== '');
-    if (compactRow.length) {
-      rows.push(compactRow);
+    const hasAnyValue = row.some((cell) => String(cell || '').trim() !== '');
+    if (hasAnyValue) {
+      rows.push(row);
     }
   });
 
   return rows;
+}
+
+function toDepartmentCsv(rows) {
+  const header = [
+    'Department ID',
+    'Department Name',
+    'Doctor ID',
+    'Doctor Name',
+    'Total',
+    'New',
+    'Cons',
+    'Flup',
+    'M Pro',
+    'Wappt',
+    'Woappt',
+    'Am',
+    'Pm',
+    'Male',
+    'Female',
+    'Saudi',
+    'Non Sa',
+    'Dir Co',
+    'Per Cap',
+    'Credit',
+    'Cash',
+  ];
+
+  let currentDeptId = '';
+  let currentDeptName = '';
+  const out = [header];
+
+  const sectionRe = /^(\s*\d+)\s*-\s*([^\-]+?)(\s*-\s*[YyNn])?\s*$/;
+  const isSectionHeader = (row) =>
+    row.length > 1 &&
+    String(row[0]).toLowerCase().includes('doctor name') &&
+    row.some((c) => String(c).toLowerCase() === 'total');
+  const isTotalRow = (row) =>
+    row.some((c) => String(c || '').trim().toLowerCase().startsWith('total'));
+  const isSectionTitleRow = (row) => {
+    const firstCell = String(row[0] || '').trim();
+    if (!firstCell) return false;
+    if (!sectionRe.test(firstCell)) return false;
+    return row.slice(1).every((c) => String(c || '').trim() === '');
+  };
+
+  for (const row of rows) {
+    if (!row.length) continue;
+    const firstCell = String(row[0] || '').trim();
+
+    // Department section title like "20268 - Family Medicine - Y"
+    if (isSectionTitleRow(row)) {
+      const m = firstCell.match(sectionRe);
+      currentDeptId = (m[1] || '').trim();
+      currentDeptName = (m[2] || '').trim();
+      continue;
+    }
+
+    if (isSectionHeader(row) || isTotalRow(row)) {
+      continue;
+    }
+
+    if (!firstCell) continue;
+
+    // Parse doctor id and name when present as "12345 - Name"
+    let doctorId = '';
+    let doctorName = firstCell;
+    const dm = firstCell.match(/^(\d+)\s*-\s*(.+)$/);
+    if (dm) {
+      doctorId = dm[1].trim();
+      doctorName = dm[2].trim();
+    }
+
+    const metrics = row
+      .slice(1)
+      .map((v) => String(v || '').trim())
+      .filter((v) => v !== '');
+    const METRIC_COUNT = 17;
+    const norm = metrics.slice(0, METRIC_COUNT);
+    while (norm.length < METRIC_COUNT) norm.push('');
+
+    out.push([
+      currentDeptId,
+      currentDeptName,
+      doctorId,
+      doctorName,
+      ...norm,
+    ]);
+  }
+
+  return out.map((r) => r.map(csvEscape).join(',')).join('\n');
 }
 
 function cleanCell(cellHtml) {
