@@ -12,7 +12,10 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "cheerio": "^1.1.2",
+    "dayjs": "^1.11.19",
     "express": "^5.1.0",
+    "fast-csv": "^5.0.5",
     "googleapis": "^165.0.0",
     "multer": "^2.0.2"
   }

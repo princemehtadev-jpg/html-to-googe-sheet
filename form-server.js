@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { execFile } = require('child_process');
+const { convertHtmlToCsv } = require('./html-to-csv');
 
 const PORT = process.env.PORT || 4000;
 const uploadRoot = path.join(os.tmpdir(), 'dallah-uploads');
@@ -56,7 +57,7 @@ app.post(
       const departmentUpload = req.files.departmentFile?.[0] || null;
 
       if (!revenueUpload && !departmentUpload) {
-        throw new Error('Please upload at least one HTML report.');
+        throw new Error('Please upload at least one HTML/CSV report.');
       }
 
       const metadata = {
@@ -107,13 +108,13 @@ app.listen(PORT, () => {
   console.log(`Form server running on http://localhost:${PORT}`);
 });
 
-function ensureCsv(filePath) {
+async function ensureCsv(filePath) {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === '.csv') {
-    return Promise.resolve(filePath);
+    return filePath;
   }
 
-  return convertHtmlToCsv(filePath);
+  return convertHtmlToCsv(filePath, { quiet: true });
 }
 
 function syncSheets(csvPaths, metadata) {
@@ -128,7 +129,9 @@ function syncSheets(csvPaths, metadata) {
     args.push('--medical', metadata.complaintsMedical);
     args.push('--administrative', metadata.complaintsAdministrative);
     args.push('--referrals', metadata.referrals);
+    if (metadata.remarks) {
     args.push('--remarks', metadata.remarks);
+    }
     args.push(...csvPaths);
 
     execFile(
@@ -157,104 +160,6 @@ function ensureDirectory(dir) {
   }
 }
 
-async function convertHtmlToCsv(htmlPath) {
-  const html = await fs.promises.readFile(htmlPath, 'utf8');
-  const rows = extractRows(html);
-  if (!rows.length) {
-    throw new Error(`No table data detected in ${path.basename(htmlPath)}.`);
-  }
-
-  const csv = rows.map((row) => row.map(csvEscape).join(',')).join('\n');
-  const csvPath = htmlPath.replace(/\.html?$/i, '.csv');
-  await fs.promises.writeFile(csvPath, csv, 'utf8');
-  return csvPath;
-}
-
-function extractRows(html) {
-  const rowMatches = html.match(/<tr[\s\S]*?<\/tr>/gi) || [];
-  const rows = [];
-
-  rowMatches.forEach((rowHtml) => {
-    const cellMatches = rowHtml.match(/<t[dh][^>]*>[\s\S]*?<\/t[dh]>/gi) || [];
-    if (!cellMatches.length) {
-      return;
-    }
-
-    const row = [];
-    cellMatches.forEach((cellHtml) => {
-      const text = cleanCell(cellHtml);
-      const colspan = extractSpan(cellHtml, 'colspan');
-      row.push(text);
-      for (let i = 1; i < colspan; i += 1) {
-        row.push('');
-      }
-    });
-
-    const compactRow = row.filter((cell) => cell !== '');
-    if (compactRow.length) {
-      rows.push(compactRow);
-    }
-  });
-
-  return rows;
-}
-
-function cleanCell(cellHtml) {
-  const inner = cellHtml
-    .replace(/^<t[dh][^>]*>/i, '')
-    .replace(/<\/t[dh]>$/i, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  return decodeEntities(inner);
-}
-
-function extractSpan(cellHtml, attribute) {
-  const match = cellHtml.match(
-    new RegExp(`${attribute}\\s*=\\s*["']?(\\d+)`, 'i'),
-  );
-  if (!match) {
-    return 1;
-  }
-  const span = Number.parseInt(match[1], 10);
-  return Number.isFinite(span) && span > 1 ? span : 1;
-}
-
-const ENTITY_MAP = {
-  nbsp: ' ',
-  amp: '&',
-  lt: '<',
-  gt: '>',
-  quot: '"',
-  apos: "'",
-};
-
-function decodeEntities(value) {
-  return value.replace(/&(#x?[0-9a-f]+|\w+);/gi, (match, entity) => {
-    const lower = entity.toLowerCase();
-    if (ENTITY_MAP[lower]) {
-      return ENTITY_MAP[lower];
-    }
-    if (lower.startsWith('#x')) {
-      return String.fromCharCode(parseInt(lower.slice(2), 16));
-    }
-    if (lower.startsWith('#')) {
-      return String.fromCharCode(parseInt(lower.slice(1), 10));
-    }
-    return match;
-  });
-}
-
-function csvEscape(value) {
-  if (value === undefined || value === null) {
-    return '';
-  }
-  const str = String(value);
-  const needsQuotes = /[",\n]/.test(str);
-  const escaped = str.replace(/"/g, '""');
-  return needsQuotes ? `"${escaped}"` : escaped;
-}
 
 async function removeDirectory(dirPath) {
   try {
