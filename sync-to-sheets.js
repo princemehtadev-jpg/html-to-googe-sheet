@@ -35,6 +35,9 @@ async function main() {
   }
 
   const { revenueRows, departmentRows } = loadDatasets(csvFiles);
+  const doctorNameMap = buildDoctorNameMap(revenueRows, departmentRows);
+  const revenueWithCommon = addCommonDoctorNameColumn(revenueRows, doctorNameMap);
+  const departmentWithCommon = addCommonDoctorNameColumn(departmentRows, doctorNameMap);
   if (!revenueRows.length && !departmentRows.length) {
     console.error('No CSV data available to push.');
     process.exit(1);
@@ -46,8 +49,8 @@ async function main() {
   const revenueTab = BASE_REVENUE_TAB;
   const departmentTab = BASE_DEPARTMENT_TAB;
 
-  const datedRevenueRows = applyClinicColumn(applyDateColumn(revenueRows, reportPeriod), clinicName);
-  const datedDepartmentRows = applyClinicColumn(applyDateColumn(departmentRows, reportPeriod), clinicName);
+  const datedRevenueRows = applyClinicColumn(applyDateColumn(revenueWithCommon, reportPeriod), clinicName);
+  const datedDepartmentRows = applyClinicColumn(applyDateColumn(departmentWithCommon, reportPeriod), clinicName);
 
   const normalizedRevenueRows = ensureColumnsHaveValues(datedRevenueRows, ['doctor name']);
   const normalizedDepartmentRows = ensureColumnsHaveValues(datedDepartmentRows, ['department name', 'doctor name']);
@@ -200,6 +203,77 @@ async function appendOtherMetricsRow(
 
   // 👇 ensure the Date column in "Other" is formatted as a Date
   await ensureDateColumnFormat(sheets, spreadsheetId, OTHER_TAB, header);
+}
+
+function buildDoctorNameMap(...datasets) {
+  const map = new Map();
+
+  datasets.forEach((rows) => {
+    if (!rows.length) return;
+    const [header, ...dataRows] = rows;
+    const doctorIdIdx = findColumnIndex(header, 'doctor id');
+    const doctorNameIdx = findColumnIndex(header, 'doctor name');
+    if (doctorIdIdx === -1 || doctorNameIdx === -1) return;
+
+    dataRows.forEach((row) => {
+      const doctorId = normalizeDoctorId(row[doctorIdIdx]);
+      if (!doctorId || map.has(doctorId)) return;
+
+      const doctorName = normalizeDoctorName(row[doctorNameIdx]);
+      map.set(doctorId, doctorName);
+    });
+  });
+
+  return map;
+}
+
+function addCommonDoctorNameColumn(rows, doctorNameMap) {
+  if (!rows.length) return rows;
+
+  const [header, ...dataRows] = cloneRows(rows);
+  const doctorIdIdx = findColumnIndex(header, 'doctor id');
+  if (doctorIdIdx === -1) return rows;
+
+  let targetIndex = findColumnIndex(header, 'common doctor name');
+  const updatedHeader = [...header];
+  let workingRows = dataRows.map((row) => [...row]);
+
+  if (targetIndex === -1) {
+    const doctorNameIdx = findColumnIndex(header, 'doctor name');
+    targetIndex = doctorNameIdx !== -1 ? doctorNameIdx + 1 : doctorIdIdx + 1;
+    updatedHeader.splice(targetIndex, 0, 'Common Doctor Name');
+    workingRows = workingRows.map((row) => {
+      const copy = [...row];
+      copy.splice(targetIndex, 0, '');
+      return copy;
+    });
+  }
+
+  const normalizedRows = workingRows.map((row) => {
+    const copy = [...row];
+    const doctorId = normalizeDoctorId(copy[doctorIdIdx]);
+    const resolvedName = (doctorId && doctorNameMap.get(doctorId)) || UNKNOWN_LABEL;
+    copy[targetIndex] = resolvedName;
+    return copy;
+  });
+
+  return [updatedHeader, ...normalizedRows];
+}
+
+function normalizeDoctorId(value) {
+  if (value === undefined || value === null) return '';
+  return String(value).trim();
+}
+
+function normalizeDoctorName(value) {
+  if (value === undefined || value === null) return UNKNOWN_LABEL;
+  const text = String(value).trim();
+  if (!text) return UNKNOWN_LABEL;
+  const lower = text.toLowerCase();
+  if (lower === 'unknown' || lower === 'null' || lower === 'undefined') {
+    return UNKNOWN_LABEL;
+  }
+  return text;
 }
 
 
@@ -558,7 +632,9 @@ async function ensureDateColumnFormat(sheets, spreadsheetId, tabName, headerRow)
   });
 }
 
-main().catch((error) => {
-  console.error(error.message || error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.message || error);
+    process.exit(1);
+  });
+}
