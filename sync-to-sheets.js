@@ -35,9 +35,6 @@ async function main() {
   }
 
   const { revenueRows, departmentRows } = loadDatasets(csvFiles);
-  const doctorNameMap = buildDoctorNameMap(revenueRows, departmentRows);
-  const revenueWithCommon = addCommonDoctorNameColumn(revenueRows, doctorNameMap);
-  const departmentWithCommon = addCommonDoctorNameColumn(departmentRows, doctorNameMap);
   if (!revenueRows.length && !departmentRows.length) {
     console.error('No CSV data available to push.');
     process.exit(1);
@@ -49,11 +46,19 @@ async function main() {
   const revenueTab = BASE_REVENUE_TAB;
   const departmentTab = BASE_DEPARTMENT_TAB;
 
-  const datedRevenueRows = applyClinicColumn(applyDateColumn(revenueWithCommon, reportPeriod), clinicName);
-  const datedDepartmentRows = applyClinicColumn(applyDateColumn(departmentWithCommon, reportPeriod), clinicName);
+  const datedRevenueRows = applyClinicColumn(applyDateColumn(revenueRows, reportPeriod), clinicName);
+  const datedDepartmentRows = applyClinicColumn(applyDateColumn(departmentRows, reportPeriod), clinicName);
 
-  const normalizedRevenueRows = ensureColumnsHaveValues(datedRevenueRows, ['doctor name']);
-  const normalizedDepartmentRows = ensureColumnsHaveValues(datedDepartmentRows, ['department name', 'doctor name']);
+  const doctorNameMap = buildDoctorNameMap(datedRevenueRows, datedDepartmentRows);
+  const revenueWithCommonDoctor = addCommonDoctorNameColumn(datedRevenueRows, doctorNameMap);
+  const departmentWithCommonDoctor = addCommonDoctorNameColumn(datedDepartmentRows, doctorNameMap);
+
+  const departmentNameMap = buildDepartmentNameMap(departmentWithCommonDoctor);
+  const revenueWithCommonDept = addCommonDepartmentNameColumn(revenueWithCommonDoctor, departmentNameMap);
+  const departmentWithCommonDept = addCommonDepartmentNameColumn(departmentWithCommonDoctor, departmentNameMap);
+
+  const normalizedRevenueRows = ensureColumnsHaveValues(revenueWithCommonDept, ['doctor name', 'common doctor name', 'common department name']);
+  const normalizedDepartmentRows = ensureColumnsHaveValues(departmentWithCommonDept, ['department name', 'doctor name', 'common doctor name', 'common department name']);
 
   const formattedRevenueRows = formatNumericColumns(
     normalizedRevenueRows,
@@ -227,6 +232,33 @@ function buildDoctorNameMap(...datasets) {
   return map;
 }
 
+function buildDepartmentNameMap(rows) {
+  const map = new Map();
+  if (!rows.length) return map;
+
+  const [header, ...dataRows] = rows;
+  const doctorIdIdx = findColumnIndex(header, 'doctor id');
+  const clinicIdx = findColumnIndex(header, 'clinic');
+  const departmentIdx = findColumnIndex(header, 'department name');
+  if (doctorIdIdx === -1 || clinicIdx === -1 || departmentIdx === -1) {
+    return map;
+  }
+
+  dataRows.forEach((row) => {
+    const doctorId = normalizeDoctorId(row[doctorIdIdx]);
+    const clinic = normalizeClinicValue(row[clinicIdx]);
+    const departmentName = normalizeDepartmentName(row[departmentIdx]);
+    if (!doctorId || !clinic) return;
+
+    const key = buildClinicDoctorKey(clinic, doctorId);
+    if (!map.has(key)) {
+      map.set(key, departmentName);
+    }
+  });
+
+  return map;
+}
+
 function addCommonDoctorNameColumn(rows, doctorNameMap) {
   if (!rows.length) return rows;
 
@@ -260,6 +292,53 @@ function addCommonDoctorNameColumn(rows, doctorNameMap) {
   return [updatedHeader, ...normalizedRows];
 }
 
+function addCommonDepartmentNameColumn(rows, departmentNameMap) {
+  if (!rows.length) return rows;
+
+  const [header, ...dataRows] = cloneRows(rows);
+  const doctorIdIdx = findColumnIndex(header, 'doctor id');
+  const clinicIdx = findColumnIndex(header, 'clinic');
+  if (doctorIdIdx === -1 || clinicIdx === -1) return rows;
+
+  let targetIndex = findColumnIndex(header, 'common department name');
+  const updatedHeader = [...header];
+  let workingRows = dataRows.map((row) => [...row]);
+
+  if (targetIndex === -1) {
+    const departmentNameIdx = findColumnIndex(header, 'department name');
+    if (departmentNameIdx !== -1) {
+      targetIndex = departmentNameIdx + 1;
+    } else {
+      const doctorNameIdx = findColumnIndex(header, 'doctor name');
+      targetIndex = doctorNameIdx !== -1 ? doctorNameIdx + 1 : doctorIdIdx + 1;
+    }
+    updatedHeader.splice(targetIndex, 0, 'Common Department Name');
+    workingRows = workingRows.map((row) => {
+      const copy = [...row];
+      copy.splice(targetIndex, 0, '');
+      return copy;
+    });
+  }
+
+  const resolvedDoctorIdx = findColumnIndex(updatedHeader, 'doctor id');
+  const resolvedClinicIdx = findColumnIndex(updatedHeader, 'clinic');
+  if (resolvedDoctorIdx === -1 || resolvedClinicIdx === -1) {
+    return rows;
+  }
+
+  const normalizedRows = workingRows.map((row) => {
+    const copy = [...row];
+    const doctorId = normalizeDoctorId(copy[resolvedDoctorIdx]);
+    const clinic = normalizeClinicValue(copy[resolvedClinicIdx]);
+    const key = doctorId && clinic ? buildClinicDoctorKey(clinic, doctorId) : '';
+    const resolvedName = (key && departmentNameMap.get(key)) || UNKNOWN_LABEL;
+    copy[targetIndex] = resolvedName;
+    return copy;
+  });
+
+  return [updatedHeader, ...normalizedRows];
+}
+
 function normalizeDoctorId(value) {
   if (value === undefined || value === null) return '';
   return String(value).trim();
@@ -274,6 +353,28 @@ function normalizeDoctorName(value) {
     return UNKNOWN_LABEL;
   }
   return text;
+}
+
+function normalizeClinicValue(value) {
+  if (value === undefined || value === null) return '';
+  const text = String(value).trim();
+  if (!text) return '';
+  return text;
+}
+
+function normalizeDepartmentName(value) {
+  if (value === undefined || value === null) return UNKNOWN_LABEL;
+  const text = String(value).trim();
+  if (!text) return UNKNOWN_LABEL;
+  const lower = text.toLowerCase();
+  if (lower === 'unknown' || lower === 'null' || lower === 'undefined') {
+    return UNKNOWN_LABEL;
+  }
+  return text;
+}
+
+function buildClinicDoctorKey(clinic, doctorId) {
+  return `${clinic.toLowerCase()}::${doctorId}`;
 }
 
 
