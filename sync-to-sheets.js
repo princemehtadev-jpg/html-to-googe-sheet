@@ -58,7 +58,8 @@ async function main() {
   const departmentWithCommonDept = addCommonDepartmentNameColumn(departmentWithCommonDoctor, departmentNameMap);
 
   const normalizedRevenueRows = ensureColumnsHaveValues(revenueWithCommonDept, ['doctor name', 'common doctor name', 'common department name']);
-  const normalizedDepartmentRows = ensureColumnsHaveValues(departmentWithCommonDept, ['department name', 'doctor name', 'common doctor name', 'common department name']);
+  const departmentWithSlot = addConstantColumn(departmentWithCommonDept, 'Slot', 832);
+  const normalizedDepartmentRows = ensureColumnsHaveValues(departmentWithSlot, ['department name', 'doctor name', 'common doctor name', 'common department name']);
 
   const formattedRevenueRows = formatNumericColumns(
     normalizedRevenueRows,
@@ -257,6 +258,16 @@ function buildDepartmentNameMap(rows) {
   });
 
   return map;
+}
+
+function addConstantColumn(rows, columnName, value) {
+  if (!rows.length || !columnName) return rows;
+  const [header, ...dataRows] = cloneRows(rows);
+  if (findColumnIndex(header, columnName) !== -1) return rows;
+
+  const updatedHeader = [...header, columnName];
+  const updatedRows = dataRows.map((row) => [...row, value]);
+  return [updatedHeader, ...updatedRows];
 }
 
 function addCommonDoctorNameColumn(rows, doctorNameMap) {
